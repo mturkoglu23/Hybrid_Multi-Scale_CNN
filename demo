@@ -1,0 +1,82 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.layers import *
+from tensorflow.keras.models import Model, load_model
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.layers import Bidirectional
+
+df = pd.read_excel("data.xlsx")
+X = df.drop(columns=["SoC"]).select_dtypes(include=["float64", "int64"])
+y = df["SoC"].values
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+scaler = MinMaxScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+X_train = np.expand_dims(X_train, axis=-1)
+X_test = np.expand_dims(X_test, axis=-1)
+
+print("X_test shape:", X_test.shape)
+print("y_test shape:", y_test.shape)
+
+# === Layers ===
+def multi_scale_cnn(x, filters):
+    conv1 = Conv1D(filters, kernel_size=1, activation='relu', padding='same')(x)
+    conv3 = Conv1D(filters, kernel_size=3, activation='relu', padding='same')(x)
+    conv5 = Conv1D(filters, kernel_size=5, activation='relu', padding='same')(x)
+    return concatenate([conv1, conv3, conv5], axis=-1)
+
+def improved_residual_block(x, filters):
+    shortcut = Conv1D(filters, kernel_size=1, padding='same')(x)
+    res = Conv1D(filters, kernel_size=1, padding='same', activation='swish')(x)
+    res = BatchNormalization()(res)
+    res = Conv1D(filters, kernel_size=3, padding='same', activation='swish')(res)
+    res = BatchNormalization()(res)
+    res = Conv1D(filters, kernel_size=1, padding='same')(res)
+    x = Add()([shortcut, res])
+    return Activation('swish')(x)
+
+# === 3. Proposed model ===
+def build_model(input_shape):
+    input_layer = Input(shape=input_shape)
+    x = multi_scale_cnn(input_layer, 128)
+    x = BatchNormalization()(x)
+    x = improved_residual_block(input_layer, 128)
+    # x = LSTM(128, return_sequences=False)(x)
+    x = Flatten()(x)
+    x = Dense(128, activation='relu')(x)
+    # x = Dense(128, activation='relu')(x)
+    output = Dense(1)(x)
+    return Model(inputs=input_layer, outputs=output)
+
+model = build_model((X_train.shape[1], 1))
+model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+
+# === 4. CALLBACKS and TRAİN ===
+callbacks = [
+    EarlyStopping(monitor='val_loss', patience=100, restore_best_weights=True),
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=75)
+]
+
+model.fit(X_train, y_train, epochs=2000, batch_size=64,
+          validation_split=0.1, callbacks=callbacks, verbose=1)
+
+model.save("trained_soc_model_lstm.h5")
+print("Model saved.")
+
+
+y_pred = loaded_model.predict(X_test).flatten()
+mae = mean_absolute_error(y_test, y_pred)
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print(f"\nPerformance:")
+print(f"MAE: {mae:.4f}")
+print(f"MSE: {mse:.4f}")
+print(f"R²:  {r2:.4f}")
